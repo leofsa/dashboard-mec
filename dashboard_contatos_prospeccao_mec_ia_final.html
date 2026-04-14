@@ -459,6 +459,46 @@
         .toLowerCase();
     }
 
+    // Grupos canônicos de instituições — mesmo mapeamento do ia.py
+    // Garante que "UniFAT", "FAT" e "Faculdade Anísio Teixeira" viram "UNIFAT" na chave
+    const GRUPOS_INST_JS = {
+      'GRUPO_ANHANGUERA': ['anhanguera', 'pitagoras', 'unopar', 'faculdade pitagoras'],
+      'UNIFAT':  ['unifat', 'fat', 'faculdade anisio teixeira', 'anisio teixeira'],
+      'UNIFAN':  ['unifan', 'fan', 'faculdade nobre', 'nobre de feira'],
+      'ESTACIO': ['estacio', 'estacio de sa', 'universidade estacio'],
+      'UEFS':    ['uefs', 'universidade estadual de feira de santana'],
+      'UFRB':    ['ufrb', 'universidade federal do reconcavo da bahia', 'reconcavo da bahia'],
+      'UNEB':    ['uneb', 'universidade do estado da bahia'],
+      'UNICESUMAR': ['unicesumar', 'universidade cesumar', 'cesumar'],
+      'UNIFACS': ['unifacs', 'universidade salvador'],
+      'UNIASSELVI': ['uniasselvi', 'leonardo da vinci'],
+      'UNINASSAU': ['uninassau', 'nassau'],
+      'UNIT':    ['unit', 'universidade tiradentes'],
+      'UNIRB':   ['unirb'],
+      'UNIJORGE':['unijorge', 'jorge amado'],
+      'UNIAENE': ['uniaene'],
+      'UNIFACEMP':['unifacemp'],
+      'UNIMAM':  ['unimam'],
+      'FSC':     ['fsc', 'faculdade de santa cruz da bahia'],
+      'FARJ':    ['farj', 'faculdade regional de riachao'],
+      'UNIAGES': ['uniages'],
+      'UNEF':    ['unef', 'universidade de ensino superior de feira'],
+      'UNEX':    ['unex'],
+    };
+
+    function normInstituicao(txt) {
+      const n = normalizeText(txt);
+      if (!n) return n;
+      for (const [grupo, aliases] of Object.entries(GRUPOS_INST_JS)) {
+        for (const alias of aliases) {
+          if (n === alias) return grupo;                              // exato
+          if (alias.length >= 4 && n.includes(alias)) return grupo;  // n contém alias
+          if (alias.length >= 4 && alias.includes(n)) return grupo;  // alias contém n
+        }
+      }
+      return n; // sem grupo → usa o texto normalizado mesmo
+    }
+
     function safeValue(value) {
       return value === undefined || value === null ? '' : String(value).trim();
     }
@@ -473,14 +513,14 @@
     }
 
     function createKey(row) {
-      const instituicao = normalizeText(row['Instituição'] || row['Instituicao']);
+      const instituicao = normInstituicao(row['Instituição'] || row['Instituicao']);
       const curso = normalizeText(row['Curso']);
       const semestre = normalizeText(normalizeSemesterValue(row['Semestre']));
       return [instituicao, curso, semestre].join('||');
     }
 
     function createMecCompareKey(instituicao, curso) {
-      return [normalizeText(instituicao), normalizeText(curso)].join('||');
+      return [normInstituicao(instituicao), normalizeText(curso)].join('||');
     }
 
     function createStatusKey(row) {
