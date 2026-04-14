@@ -172,7 +172,7 @@
           </div>
           <div class="small muted">
             <div>• Comparação principal: <strong>Contatos x Geral</strong></div>
-            <div>• Status dos faltantes: usa apenas a <strong>Planilha de Contatos</strong> pela chave Instituição + Curso</div>
+            <div>• Status dos faltantes: usa a <strong>Planilha de Oportunidades</strong>, coluna <strong>Fase/Status</strong></div>
             <div>• Resultado: indicadores e tabela baseados na <strong>planilha projetada</strong></div>
             <div>• Semestres são normalizados para <strong>AAAA-1 / AAAA-2</strong></div>
             <div>• Projeção automática: <strong>+6 semestres</strong> a partir do semestre faltante</div>
@@ -213,8 +213,8 @@
         <button class="btn ghost" id="clearBtn">Limpar</button>
       </div>
       <div class="footer-note">
-        O Excel de faltantes contém o registro faltante original mais a projeção automática dos próximos semestres.
-        Ex.: 2026-1 gera 2026-2, 2027-1, 2027-2, 2028-1, 2028-2 e 2029-1. Se algum semestre projetado já existir na <strong>Planilha de Contatos</strong>, ele é removido do resultado. O gráfico de status usa somente a coluna <strong>Status</strong> da planilha de contatos: <strong>EmNegociacao/Novo → Negociação</strong>, <strong>Convertido → Ganhamos</strong> e <strong>Perdido → Perdemos</strong>. A cobertura é calculada como <strong>contatos válidos ÷ total sem contato</strong>.
+        O Excel de faltantes contém apenas os semestres projetados que ainda não existem na Planilha Geral nem na Planilha de Contatos.
+        Ex.: 2026-1 gera 2026-2, 2027-1, 2027-2, 2028-1, 2028-2 e 2029-1. Se algum semestre projetado já existir na <strong>Planilha de Contatos</strong> ou na <strong>Planilha Geral</strong>, ele é removido do resultado. O gráfico de status usa a coluna <strong>Fase/Status</strong> da <strong>Planilha de Oportunidades</strong>: <strong>Ganhamos → Ganhamos</strong>, <strong>Negociação/Orçamento → Negociação</strong> e <strong>Perdemos → Perdemos</strong>. A cobertura é calculada como <strong>com contato ÷ total da Planilha Geral</strong>.
       </div>
     </section>
 
@@ -250,7 +250,7 @@
         <div class="kpi"><div class="label">Total com contato</div><div id="kpiComContato" class="value">0</div><div class="delta">Também existem em Contatos</div></div>
         <div class="kpi"><div class="label">Total sem contato</div><div id="kpiSemContato" class="value">0</div><div class="delta">Baseado no resultado projetado</div></div>
         <div class="kpi"><div class="label">Perdas por semestre vencido</div><div id="kpiPerdasSemContato" class="value">0</div><div class="delta">Semestres passados ou atuais sem contato</div></div>
-        <div class="kpi"><div class="label">Cobertura</div><div id="kpiCobertura" class="value">0%</div><div class="delta">Contatos ÷ total sem contato</div></div>
+        <div class="kpi"><div class="label">Cobertura</div><div id="kpiCobertura" class="value">0%</div><div class="delta">Com contato ÷ total da Geral</div></div>
       </div>
     </section>
 
@@ -271,7 +271,7 @@
 
     <section class="panel">
       <div class="panel-title">
-        <h3>5) Resultado dos faltantes + projeção</h3>
+        <h3>5) Resultado dos faltantes projetados</h3>
         <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
           <span id="missingCountBadge" class="pill warning">0 registro(s)</span>
           <span id="lossCountBadge" class="pill danger">0 perdas</span>
@@ -294,7 +294,6 @@
           <label>Tipo Registro</label>
           <select id="filterTipo" onchange="applyTableFilters()">
             <option value="">Todos</option>
-            <option value="Original">Original</option>
             <option value="Projeção">Projeção</option>
           </select>
         </div>
@@ -320,11 +319,11 @@
       <div class="prospeccao-grid">
         <div class="filter-card">
           <h4>Configuração da API local</h4>
-          <p>Se abrir o HTML direto pelo arquivo local, o navegador pode bloquear a chamada para a API. O ideal é abrir o HTML por um servidor local ou habilitar CORS no backend. Este módulo envia a planilha geral para a API e usa IA para resolver equivalência de instituições abreviadas e nomes completos.</p>
+          <p>Em produção, não use 127.0.0.1. Deixe vazio para usar automaticamente a mesma URL onde o sistema está hospedado. O módulo envia a planilha geral para a API e usa IA para resolver equivalência de instituições abreviadas e nomes completos.</p>
           <div class="two-col">
             <div class="filter-field">
               <label for="apiBaseUrl">URL base da API</label>
-              <input id="apiBaseUrl" class="text-input" type="text" value="http://127.0.0.1:8000" />
+              <input id="apiBaseUrl" class="text-input" type="text" value="https://prospeccao-api.onrender.com" placeholder="https://prospeccao-api.onrender.com" />
             </div>
             <div class="filter-field">
               <label for="cidadeMec">Cidade</label>
@@ -418,6 +417,8 @@
       geral: [],
       oportunidades: [],
       oportunidadesMap: new Map(),
+      oportunidadesStatusMap: new Map(),
+      oportunidadesStatusCursoMap: new Map(),
       contatosStatusMap: new Map(),
       contatosCount: 0,
       filteredGeral: [],
@@ -452,11 +453,63 @@
 
     function normalizeText(value) {
       return String(value ?? '')
+        .replace(/[\u00A0\u200B-\u200D\uFEFF]/g, ' ')
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
         .trim()
         .replace(/\s+/g, ' ')
         .toLowerCase();
+    }
+
+    function normalizeHeaderName(value) {
+      return normalizeText(value)
+        .replace(/[^a-z0-9]/g, '');
+    }
+
+    const FIELD_ALIASES = {
+      instituicao: ['Instituição', 'Instituicao', 'Instituição de Ensino', 'Instituicao de Ensino', 'IES', 'Nome Instituição', 'Nome Instituicao'],
+      curso: ['Curso', 'Nome do Curso', 'Curso Nome'],
+      semestre: ['Semestre', 'Semestr', 'Sem.', 'Periodo', 'Período', 'Ano/Semestre', 'Ano Semestre', 'Semestre Letivo'],
+      status: ['Status', 'Situação', 'Situacao'],
+      faseStatus: ['Fase/Status', 'Fase Status', 'Fase', 'Etapa'],
+      dataCadastro: ['Data de Cadastro', 'Data Cadastro', 'Data', 'Dt Cadastro', 'Data Cadastro Lead', 'Criado em']
+    };
+
+    function getField(row, aliases, fallback = '') {
+      if (!row) return fallback;
+      const names = Array.isArray(aliases) ? aliases : (FIELD_ALIASES[aliases] || [aliases]);
+
+      for (const name of names) {
+        if (Object.prototype.hasOwnProperty.call(row, name) && row[name] !== undefined && row[name] !== null && String(row[name]).trim() !== '') {
+          return row[name];
+        }
+      }
+
+      const normalizedNames = new Set(names.map(normalizeHeaderName));
+      for (const key of Object.keys(row)) {
+        if (normalizedNames.has(normalizeHeaderName(key)) && row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') {
+          return row[key];
+        }
+      }
+      return fallback;
+    }
+
+    function standardizeRow(row) {
+      const clone = { ...row };
+      const inst = getField(clone, 'instituicao');
+      const curso = getField(clone, 'curso');
+      const semestre = normalizeSemesterValue(getField(clone, 'semestre'));
+      const status = getField(clone, 'status');
+      const faseStatus = getField(clone, 'faseStatus');
+      const dataCadastro = getField(clone, 'dataCadastro');
+
+      if (inst && !clone['Instituição']) clone['Instituição'] = inst;
+      if (curso && !clone['Curso']) clone['Curso'] = curso;
+      if (semestre) clone['Semestre'] = semestre;
+      if (status && !clone['Status']) clone['Status'] = status;
+      if (faseStatus && !clone['Fase/Status']) clone['Fase/Status'] = faseStatus;
+      if (dataCadastro && !clone['Data de Cadastro']) clone['Data de Cadastro'] = dataCadastro;
+      return clone;
     }
 
     // Grupos canônicos de instituições — mesmo mapeamento do ia.py
@@ -491,16 +544,16 @@
       if (!n) return n;
       for (const [grupo, aliases] of Object.entries(GRUPOS_INST_JS)) {
         for (const alias of aliases) {
-          if (n === alias) return grupo;                              // exato
-          if (alias.length >= 4 && n.includes(alias)) return grupo;  // n contém alias
-          if (alias.length >= 4 && alias.includes(n)) return grupo;  // alias contém n
+          if (n === alias) return grupo;
+          if (alias.length >= 4 && n.includes(alias)) return grupo;
+          if (alias.length >= 4 && alias.includes(n)) return grupo;
         }
       }
-      return n; // sem grupo → usa o texto normalizado mesmo
+      return n;
     }
 
     function safeValue(value) {
-      return value === undefined || value === null ? '' : String(value).trim();
+      return value === undefined || value === null ? '' : String(value).replace(/[\u00A0\u200B-\u200D\uFEFF]/g, ' ').trim();
     }
 
     function normalizeSemesterValue(value) {
@@ -513,20 +566,22 @@
     }
 
     function createKey(row) {
-      const instituicao = normInstituicao(row['Instituição'] || row['Instituicao']);
-      const curso = normalizeText(row['Curso']);
-      const semestre = normalizeText(normalizeSemesterValue(row['Semestre']));
+      const instituicao = normInstituicao(getField(row, 'instituicao'));
+      const curso = normalizeText(getField(row, 'curso'));
+      const semestre = normalizeText(normalizeSemesterValue(getField(row, 'semestre')));
+      if (!instituicao || !curso || !semestre) return '';
       return [instituicao, curso, semestre].join('||');
     }
 
     function createMecCompareKey(instituicao, curso) {
-      return [normInstituicao(instituicao), normalizeText(curso)].join('||');
+      const instKey = normInstituicao(instituicao);
+      const cursoKey = normalizeText(curso);
+      if (!instKey || !cursoKey) return '';
+      return [instKey, cursoKey].join('||');
     }
 
     function createStatusKey(row) {
-      const instituicao = row['Instituição'] || row['Instituicao'] || row['instituicao'] || '';
-      const curso = row['Curso'] || row['curso'] || '';
-      return createMecCompareKey(instituicao, curso);
+      return createMecCompareKey(getField(row, 'instituicao'), getField(row, 'curso'));
     }
 
     function mapContatoStatus(value) {
@@ -549,6 +604,23 @@
       return map;
     }
 
+    function buildOportunidadesStatusMaps(rows) {
+      const exactMap = new Map();
+      const cursoMap = new Map();
+      rows.forEach(row => {
+        const normalizedRow = standardizeRow(row);
+        const mapped = mapStatus(getStatusValue(normalizedRow));
+        if (mapped === 'Outros') return;
+
+        const exactKey = createKey(normalizedRow);
+        if (exactKey) exactMap.set(exactKey, mapped);
+
+        const cursoKey = createStatusKey(normalizedRow);
+        if (cursoKey) cursoMap.set(cursoKey, mapped);
+      });
+      return { exactMap, cursoMap };
+    }
+
     function mapStatus(value) {
       const v = normalizeText(value);
       if (['orcamento', 'negociacao', 'proposta enviada', 'propostaenviada'].includes(v)) return 'Negociação';
@@ -558,19 +630,30 @@
     }
 
     function getStatusValue(row) {
-      return row?.['Fase/Status'] ?? row?.['Fase'] ?? row?.['Status'] ?? '';
+      return getField(row, 'faseStatus') || getField(row, 'status') || '';
     }
 
     function getEffectiveMappedStatus(row) {
-      const key = createStatusKey(row);
-      if (state.contatosStatusMap && state.contatosStatusMap.has(key)) {
-        return state.contatosStatusMap.get(key);
+      const normalizedRow = standardizeRow(row);
+      const exactKey = createKey(normalizedRow);
+      if (state.oportunidadesStatusMap && state.oportunidadesStatusMap.has(exactKey)) {
+        return state.oportunidadesStatusMap.get(exactKey);
       }
       return 'Outros';
     }
 
+    function countStatusFromOportunidades(rows) {
+      const counts = { 'Negociação': 0, 'Perdemos': 0, 'Ganhamos': 0 };
+      rows.forEach(row => {
+        const normalizedRow = standardizeRow(row);
+        const mapped = mapStatus(getStatusValue(normalizedRow));
+        if (counts[mapped] !== undefined) counts[mapped] += 1;
+      });
+      return counts;
+    }
+
     function getDateField(row) {
-      return row['Data de Cadastro'] ?? row['Data Cadastro'] ?? row['Data'] ?? row['Dt Cadastro'] ?? '';
+      return getField(row, 'dataCadastro');
     }
 
     function excelDateToJSDate(serial) {
@@ -662,15 +745,15 @@
     function dedupeOriginalMissing(rows) {
       const map = new Map();
       rows.forEach(row => {
-        const inst = normalizeText(row['Instituição'] || row['Instituicao']);
-        const curso = normalizeText(row['Curso']);
-        const sem = extractSemesterInfo(row['Semestre']);
+        const inst = normInstituicao(getField(row, 'instituicao'));
+        const curso = normalizeText(getField(row, 'curso'));
+        const sem = extractSemesterInfo(getField(row, 'semestre'));
         if (!inst || !curso || !sem) return;
         const groupKey = `${inst}||${curso}`;
         const current = map.get(groupKey);
         const currentRank = sem.year * 10 + sem.semester;
         if (!current || currentRank < current._rank) {
-          map.set(groupKey, { ...row, 'Semestre': formatSemester(sem.year, sem.semester), _rank: currentRank });
+          map.set(groupKey, { ...standardizeRow(row), 'Semestre': formatSemester(sem.year, sem.semester), _rank: currentRank });
         }
       });
       return [...map.values()].map(({ _rank, ...rest }) => rest);
@@ -682,19 +765,16 @@
       const uniqueBase = dedupeOriginalMissing(baseRows);
 
       uniqueBase.forEach(row => {
-        const original = { ...row, 'Semestre': normalizeSemesterValue(row['Semestre']), 'Tipo Registro': 'Original' };
-        const keyOriginal = createKey(original);
+        const original = { ...standardizeRow(row), 'Semestre': normalizeSemesterValue(getField(row, 'semestre')) };
 
-        if (!contatosMap.has(keyOriginal) && !seen.has(keyOriginal)) {
-          seen.add(keyOriginal);
-          out.push(original);
-        }
-
+        // O resultado deve mostrar apenas semestres PROJETADOS que ainda não existem
+        // nem na Planilha Geral nem na Planilha de Contatos.
+        // O semestre original veio da própria Planilha Geral, então não é exportado.
         const futuros = generateFutureSemesters(original['Semestre'], 6);
         futuros.forEach(sem => {
-          const projected = { ...row, 'Semestre': sem, 'Tipo Registro': 'Projeção' };
+          const projected = { ...original, 'Semestre': sem, 'Tipo Registro': 'Projeção' };
           const key = createKey(projected);
-          if (!contatosMap.has(key) && !seen.has(key) && !geralMap.has(key)) {
+          if (key && !contatosMap.has(key) && !geralMap.has(key) && !seen.has(key)) {
             seen.add(key);
             out.push(projected);
           }
@@ -725,17 +805,13 @@
       const name = file.name.toLowerCase();
       if (name.endsWith('.csv')) {
         const text = await file.text();
-        return parseCSV(text);
+        return parseCSV(text).map(r => standardizeRow(r));
       }
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
       const firstSheet = workbook.SheetNames[0];
       const rows = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], { defval: '', raw: true });
-      return rows.map(r => {
-        const clone = { ...r };
-        if ('Semestre' in clone) clone['Semestre'] = normalizeSemesterValue(clone['Semestre']);
-        return clone;
-      });
+      return rows.map(r => standardizeRow(r));
     }
 
     function updateFileInfo(targetId, file, rows = null) {
@@ -753,9 +829,10 @@
     function aggregateByKey(rows) {
       const map = new Map();
       rows.forEach(row => {
-        const key = createKey(row);
-        if (!key || key === '||||') return;
-        if (!map.has(key)) map.set(key, row);
+        const normalizedRow = standardizeRow(row);
+        const key = createKey(normalizedRow);
+        if (!key) return;
+        if (!map.has(key)) map.set(key, normalizedRow);
       });
       return map;
     }
@@ -835,13 +912,13 @@
 
       state.charts.coverage = new Chart(el('coverageChart').getContext('2d'), {
         type: 'doughnut',
-        data: { labels: ['Com contato', 'Sem contato'], datasets: [{ data: [metrics.comContato, metrics.semContato], backgroundColor: [success, warning], borderWidth: 0 }] },
+        data: { labels: ['Com contato', 'Sem contato na Geral'], datasets: [{ data: [metrics.comContato, metrics.semContatoGeral ?? metrics.semContato], backgroundColor: [success, warning], borderWidth: 0 }] },
         options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { labels: { color: textColor } } } }
       });
 
       state.charts.bar = new Chart(el('barChart').getContext('2d'), {
         type: 'bar',
-        data: { labels: ['Com contato', 'Sem contato'], datasets: [{ label: 'Quantidade', data: [metrics.comContato, metrics.semContato], backgroundColor: [accent, danger], borderRadius: 10 }] },
+        data: { labels: ['Com contato', 'Sem contato na Geral'], datasets: [{ label: 'Quantidade', data: [metrics.comContato, metrics.semContatoGeral ?? metrics.semContato], backgroundColor: [accent, danger], borderRadius: 10 }] },
         options: commonOptions
       });
 
@@ -852,12 +929,9 @@
         options: { ...commonOptions, indexAxis: 'y' }
       });
 
-      const statusCounts = { 'Negociação': 0, 'Perdemos': 0, 'Ganhamos': 0 };
-      if (state.contatosStatusMap && state.contatosStatusMap.size) {
-        for (const mapped of state.contatosStatusMap.values()) {
-          if (statusCounts[mapped] !== undefined) statusCounts[mapped] += 1;
-        }
-      }
+      // Conta o status diretamente pela Planilha de Oportunidades.
+      // Não usa a tabela projetada, para não multiplicar Ganhamos/Perdemos/Negociação nas projeções futuras.
+      const statusCounts = countStatusFromOportunidades(state.oportunidades || []);
       state.charts.status = new Chart(el('statusChart').getContext('2d'), {
         type: 'pie',
         data: { labels: Object.keys(statusCounts), datasets: [{ data: Object.values(statusCounts), backgroundColor: [accent, danger, success], borderWidth: 0 }] },
@@ -982,7 +1056,7 @@
       let comContato = 0;
 
       geralMap.forEach((row, key) => {
-        const normalizedRow = { ...row, 'Semestre': normalizeSemesterValue(row['Semestre']) };
+        const normalizedRow = { ...standardizeRow(row), 'Semestre': normalizeSemesterValue(getField(row, 'semestre')) };
         if (contatosMap.has(key)) {
           comContato += 1;
         } else {
@@ -999,9 +1073,10 @@
       const perdasSemContato = allMissing.filter(row => isPastOrCurrentSemester(row['Semestre'])).length;
       const totalGeral = geralMap.size;
       const semContato = projected.length;
+      const semContatoGeral = Math.max(totalGeral - comContato, 0);
       const contatosBase = state.contatosCount || 0;
-      const cobertura = semContato ? (contatosBase / semContato) * 100 : 0;
-      const metrics = { totalGeral, comContato, semContato, cobertura, perdasSemContato, contatosBase };
+      const cobertura = totalGeral ? (comContato / totalGeral) * 100 : 0;
+      const metrics = { totalGeral, comContato, semContato, semContatoGeral, cobertura, perdasSemContato, contatosBase };
       state.metrics = metrics;
 
       updateKPIs(metrics);
@@ -1027,6 +1102,9 @@
         state.geral = await readFile(geralFile);
         state.oportunidades = oportunidadesFile ? await readFile(oportunidadesFile) : [];
         state.oportunidadesMap = aggregateByKey(state.oportunidades);
+        const oportunidadesStatus = buildOportunidadesStatusMaps(state.oportunidades);
+        state.oportunidadesStatusMap = oportunidadesStatus.exactMap;
+        state.oportunidadesStatusCursoMap = oportunidadesStatus.cursoMap;
         state.contatosStatusMap = buildContatosStatusMap(state.contatos);
         state.contatosCount = state.contatosStatusMap.size;
         updateFileInfo('contatosInfo', contatosFile, state.contatos.length);
@@ -1047,7 +1125,7 @@
       if (!state.missingRowsProjected.length) return;
       const rows = state.missingRowsProjected.map(row => ({
         ...row,
-        'Semestre': normalizeSemesterValue(row['Semestre']),
+        'Semestre': normalizeSemesterValue(getField(row, 'semestre')),
         'Status Consolidado': getEffectiveMappedStatus(row),
         'Perda por falta de contato': getEffectiveMappedStatus(row) === 'Perdemos' ? 'Sim' : 'Não'
       }));
@@ -1060,13 +1138,26 @@
     function buildGeralCourseMap(rows) {
       const map = new Map();
       rows.forEach(row => {
-        const inst = row['Instituição'] || row['Instituicao'] || '';
-        const curso = row['Curso'] || '';
-        const key = createMecCompareKey(inst, curso);
-        if (!key || key === '||') return;
-        if (!map.has(key)) map.set(key, row);
+        const normalizedRow = standardizeRow(row);
+        const key = createMecCompareKey(getField(normalizedRow, 'instituicao'), getField(normalizedRow, 'curso'));
+        if (!key) return;
+        if (!map.has(key)) map.set(key, normalizedRow);
       });
       return map;
+    }
+
+    function getApiBaseUrl() {
+      const typed = safeValue(el('apiBaseUrl')?.value).replace(/\/$/, '');
+      const host = window.location.hostname;
+      const siteIsLocal = !host || host === 'localhost' || host === '127.0.0.1' || window.location.protocol === 'file:';
+      const typedIsLocal = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(typed);
+
+      // Em site publicado, 127.0.0.1 aponta para o computador de quem acessa.
+      // Por isso, se estiver no Render/servidor e o campo estiver local, usa a própria URL do site.
+      if (!typed || (typedIsLocal && !siteIsLocal)) {
+        return window.location.origin.replace(/\/$/, '');
+      }
+      return typed;
     }
 
     async function fetchMecBase(url, payload) {
@@ -1087,7 +1178,8 @@
 
         return response.json();
       } catch (err) {
-        throw new Error('Falha de conexão. Se o HTML foi aberto por arquivo local, rode-o por um servidor local e habilite CORS no backend.');
+        if (err?.message) throw err;
+        throw new Error('Falha de conexão. Verifique se a API está publicada no mesmo servidor do HTML ou se a URL base está correta.');
       }
     }
 
@@ -1097,7 +1189,7 @@
         return;
       }
 
-      const baseUrl = safeValue(el('apiBaseUrl').value).replace(/\/$/, '');
+      const baseUrl = getApiBaseUrl();
       const cidade = safeValue(el('cidadeMec').value) || 'Feira de Santana';
       const uf = safeValue(el('ufMec').value) || 'BA';
       const cidadesRegiao = safeValue(el('regiaoCidades').value)
@@ -1125,7 +1217,7 @@
 
       ids.fetchMecBtn.disabled = true;
       ids.fetchMecRegiaoBtn.disabled = true;
-      el('mecInfo').textContent = 'Consultando base MEC com IA...';
+      el('mecInfo').textContent = `Consultando base MEC com IA em ${baseUrl}...`;
 
       try {
         const data = await fetchMecBase(endpoint, payload);
@@ -1176,6 +1268,8 @@
       state.geral = [];
       state.oportunidades = [];
       state.oportunidadesMap = new Map();
+      state.oportunidadesStatusMap = new Map();
+      state.oportunidadesStatusCursoMap = new Map();
       state.filteredGeral = [];
       state.missingRowsOriginal = [];
       state.missingRowsProjected = [];
@@ -1298,7 +1392,7 @@
 
       if (state.metrics) {
         const m = state.metrics;
-        parts.push(`## Métricas do dashboard\nTotal Geral: ${m.totalGeral} | Com contato: ${m.comContato} | Sem contato: ${m.semContato} | Perdas: ${m.perdasSemContato} | Cobertura: ${m.cobertura.toFixed(1)}%`);
+        parts.push(`## Métricas do dashboard\nTotal Geral: ${m.totalGeral} | Com contato: ${m.comContato} | Sem contato na Geral: ${m.semContatoGeral ?? ''} | Resultado projetado: ${m.semContato} | Perdas: ${m.perdasSemContato} | Cobertura: ${m.cobertura.toFixed(1)}%`);
       }
 
       if (!parts.length) parts.push('Nenhuma planilha carregada ainda.');
@@ -1313,6 +1407,7 @@
       const sources = [
         ...state.geral.map(r => ({ ...r, _fonte: 'Geral' })),
         ...state.contatos.map(r => ({ ...r, _fonte: 'Contatos' })),
+        ...state.oportunidades.map(r => ({ ...r, _fonte: 'Oportunidades' })),
         ...state.missingRowsProjected.map(r => ({ ...r, _fonte: 'Faltante' }))
       ];
       for (const row of sources) {
@@ -1327,12 +1422,104 @@
       return scored.slice(0, 20).map(s => s.row);
     }
 
+
+    function extractRespostaFromPayload(data) {
+      if (data === null || data === undefined) return '';
+      if (typeof data === 'string') return data;
+      return data.resposta || data.answer || data.message || data.content || data.result || data.text || '';
+    }
+
+    async function readApiResponse(response) {
+      const raw = await response.text();
+      if (!response.ok) {
+        let detail = raw;
+        try {
+          const parsed = raw ? JSON.parse(raw) : {};
+          detail = parsed.detail || parsed.error || parsed.message || raw;
+        } catch (_) {}
+        throw new Error(detail || ('HTTP ' + response.status));
+      }
+      if (!raw || !raw.trim()) return { resposta: '' };
+      try { return JSON.parse(raw); }
+      catch (_) { return { resposta: raw.trim() }; }
+    }
+
+    function detectMonthFromQuestion(question) {
+      const q = normalizeText(question);
+      const meses = {janeiro:1,january:1,jan:1,fevereiro:2,february:2,fev:2,feb:2,marco:3,march:3,mar:3,abril:4,april:4,abr:4,apr:4,maio:5,may:5,junho:6,june:6,jun:6,julho:7,july:7,jul:7,agosto:8,august:8,ago:8,aug:8,setembro:9,september:9,set:9,sep:9,outubro:10,october:10,out:10,oct:10,novembro:11,november:11,nov:11,dezembro:12,december:12,dez:12,dec:12};
+      for (const nome in meses) if (q.includes(nome)) return meses[nome];
+      return null;
+    }
+
+    function detectYearFromQuestion(question) {
+      const m = String(question || '').match(/\b(20\d{2})\b/);
+      return m ? Number(m[1]) : null;
+    }
+
+    function getAnyDateFromRow(row) {
+      const keys = Object.keys(row || {}).filter(k => normalizeText(k).includes('data'));
+      for (const key of keys) {
+        const d = parseDateValue(row[key]);
+        if (d) return d;
+      }
+      return null;
+    }
+
+    function rowMatchesMonthYear(row, monthNumber, yearNumber) {
+      const d = getAnyDateFromRow(row);
+      if (!d) return false;
+      if (monthNumber && (d.getMonth() + 1) !== monthNumber) return false;
+      if (yearNumber && d.getFullYear() !== yearNumber) return false;
+      return true;
+    }
+
+    function getOpportunityStatusCountsLocal(monthNumber = null, yearNumber = null) {
+      const counts = { 'Ganhamos': 0, 'Perdemos': 0, 'Negociação': 0, 'Outros': 0 };
+      state.oportunidades.forEach(row => {
+        if ((monthNumber || yearNumber) && !rowMatchesMonthYear(row, monthNumber, yearNumber)) return;
+        const mapped = mapStatus(getStatusValue(row));
+        if (mapped === 'Ganhamos') counts.Ganhamos += 1;
+        else if (mapped === 'Perdemos') counts.Perdemos += 1;
+        else if (mapped === 'Negociação') counts['Negociação'] += 1;
+        else counts.Outros += 1;
+      });
+      return counts;
+    }
+
+    function localAssistantAnswer(question) {
+      const q = normalizeText(question);
+      const hasSheets = state.geral.length || state.contatos.length || state.oportunidades.length;
+      if (!hasSheets) return 'Ainda não há planilhas carregadas nesta tela. Anexe as planilhas e clique em Processar dashboard para eu conseguir responder com base nelas.';
+
+      if (q.includes('planilha') && (q.includes('consegue') || q.includes('ler') || q.includes('le'))) {
+        return 'Sim. Estou lendo nesta tela: Geral=' + state.geral.length + ' linha(s), Contatos=' + state.contatos.length + ' linha(s), Oportunidades=' + state.oportunidades.length + ' linha(s).';
+      }
+
+      const asksStatus = q.includes('ganhamos') || q.includes('perdemos') || q.includes('negociacao') || q.includes('negociação') || q.includes('orcamento') || q.includes('orçamento') || q.includes('status');
+      if (asksStatus && state.oportunidades.length) {
+        const month = detectMonthFromQuestion(question);
+        const year = detectYearFromQuestion(question);
+        const c = getOpportunityStatusCountsLocal(month, year);
+        const base = month ? 'no mês informado' : 'na Planilha de Oportunidades';
+        if (q.includes('ganhamos') && !q.includes('perdemos') && !q.includes('negociacao') && !q.includes('negociação')) {
+          return 'Foram ' + c.Ganhamos + ' registro(s) como Ganhamos ' + base + '.';
+        }
+        return 'Status ' + base + ': Ganhamos=' + c.Ganhamos + ', Perdemos=' + c.Perdemos + ', Negociação=' + c['Negociação'] + '.';
+      }
+
+      if (state.metrics && (q.includes('cobertura') || q.includes('contato') || q.includes('faltante'))) {
+        const m = state.metrics;
+        return 'Resumo do dashboard: Total Geral=' + m.totalGeral + ', Com contato=' + m.comContato + ', Sem contato na Geral=' + (m.semContatoGeral ?? 0) + ', Resultado projetado=' + m.semContato + ', Cobertura=' + m.cobertura.toFixed(1) + '%.';
+      }
+      return '';
+    }
+
     async function sendChatMessage() {
       const input = el('chatInput');
       const question = (input.value || '').trim();
       if (!question) return;
 
-      const baseUrl = safeValue(el('apiBaseUrl')?.value).replace(/\/$/, '') || 'http://127.0.0.1:8000';
+      const baseUrl = getApiBaseUrl();
 
       addChatMessage(question, 'user');
       state.chatHistory.push({ role: 'user', content: question });
@@ -1344,36 +1531,44 @@
       el('chatStatus').textContent = '';
 
       try {
-        const resumo   = buildChatContext();
+        const resumo = buildChatContext();
         const relevant = findRelevantRows(question);
+        const localFallback = localAssistantAnswer(question);
 
-        const res = await fetch(`${baseUrl}/chat`, {
+        const res = await fetch(baseUrl + '/chat', {
           method: 'POST',
           mode: 'cors',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             mensagem: question,
+            message: question,
+            pergunta: question,
             historico: state.chatHistory.slice(-10),
-            contexto: { resumo, registros_relevantes: relevant }
+            contexto: { resumo: resumo, registros_relevantes: relevant },
+            contexto_texto: resumo,
+            registros_relevantes: relevant
           })
         });
 
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.detail || `HTTP ${res.status}`);
-        }
+        const data = await readApiResponse(res);
+        let answer = extractRespostaFromPayload(data);
+        if (!answer) answer = localFallback || 'A API /chat respondeu sem conteúdo. O backend precisa retornar JSON, por exemplo: {"resposta":"texto da resposta"}.';
 
-        const data = await res.json();
-        const answer = data.resposta || 'Sem resposta.';
         removeChatMessage(loadingId);
         addChatMessage(answer, 'bot');
         state.chatHistory.push({ role: 'assistant', content: answer });
         if (state.chatHistory.length > 20) state.chatHistory = state.chatHistory.slice(-20);
 
       } catch (err) {
+        const fallback = localAssistantAnswer(question);
         removeChatMessage(loadingId);
-        addChatMessage(`Não foi possível obter resposta: ${err.message}`, 'bot');
-        el('chatStatus').textContent = `Erro: ${err.message}`;
+        if (fallback) {
+          addChatMessage(fallback, 'bot');
+          el('chatStatus').textContent = 'Aviso: API online não respondeu corretamente (' + err.message + '). Usei leitura local das planilhas.';
+        } else {
+          addChatMessage('Não foi possível obter resposta da IA online: ' + err.message + '. Confira se o backend do Render possui o endpoint POST /chat retornando JSON.', 'bot');
+          el('chatStatus').textContent = 'Erro: ' + err.message;
+        }
       } finally {
         el('chatSendBtn').disabled = false;
       }
